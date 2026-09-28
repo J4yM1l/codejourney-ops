@@ -24,6 +24,7 @@ env:
 
 jobs:
   release-stage:
+    environment: GITOPS_TOKEN
     runs-on: [self-hosted, k3s-gitops]
     timeout-minutes: 30
 
