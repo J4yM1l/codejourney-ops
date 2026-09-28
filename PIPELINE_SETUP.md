@@ -1,3 +1,43 @@
+# Current GitHub Actions to Argo CD setup (2026-09-28)
+
+The current workflow no longer builds on the homelab runner or applies Kubernetes
+manifests directly. GitHub-hosted runners validate and build AMD64 candidates from
+`poc/agent-visualizer-skills`, publish immutable GHCR digests, and dispatch them to
+`codejourney-ops`. The dedicated `k3s-gitops` runner uses checksum-verified `crane`
+to copy those digests to `192.168.0.45:30080`, verifies equality, and commits the
+stage web/API digest and source annotations to `homelab-infra/main`. Argo CD owns
+the cluster rollout. Production promotion remains manual.
+
+Required GitHub configuration:
+
+- `CodeJourney` repository secret `GHCR_TOKEN`: dispatch access to
+  `codejourney-ops`.
+- `codejourney-ops` repository secret `GHCR_TOKEN`: read candidate packages.
+- `codejourney-ops` environment `GITOPS_TOKEN`, containing secret `GITOPS_TOKEN`:
+  fine-grained token selecting `homelab-infra`, Contents read/write.
+- No GitHub environment variables are required.
+
+Validate a release by confirming both Actions runs succeeded, the release-bot
+commit reached `homelab-infra/main`, `stage-codejourney` is Synced/Healthy, both
+Deployments use the expected Zot digests and source SHA, PVCs are Bound, pods are
+Ready without restarts, `/` and `/agent` return 200, and GraphQL answers
+`{__typename}`. A rerun is safe because images and manifests use immutable digests.
+
+Troubleshooting:
+
+- `Input required and not supplied: token`: bind the job to the environment holding
+  `GITOPS_TOKEN`.
+- Checkout 403: ensure the fine-grained token selects `homelab-infra` and grants
+  Contents read/write.
+- GHCR failure: rotate `GHCR_TOKEN` without printing it.
+- Zot failure: verify registry health and trusted-LAN reachability.
+
+> The complete original setup guide below is retained as implementation history.
+> Its direct-deployment, privileged BuildKit, and `dev-testing` instructions are
+> superseded and must not be applied to the current GitOps pipeline.
+
+---
+
 # CodeJourney CI/CD Pipeline — Complete Setup Guide
 
 > **What this guide does:** Every time you push code to the `main` branch of CodeJourney, it automatically builds Docker images for the web app and API, pushes them to your home-lab registry, applies any infrastructure changes, and rolls out both services to your Kubernetes cluster — all for free, with zero manual steps.

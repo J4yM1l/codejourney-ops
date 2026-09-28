@@ -1,3 +1,29 @@
+# Current GitOps release architecture (2026-09-28)
+
+The active stage release path is:
+
+```text
+push poc/agent-visualizer-skills
+  -> GitHub-hosted AMD64 typecheck, test, build, and GHCR publish
+  -> repository_dispatch to codejourney-ops
+  -> unprivileged k3s-gitops runner copies exact digests to LAN Zot
+  -> release bot updates homelab-infra/main by digest
+  -> Argo CD auto-syncs stage-codejourney
+  -> production promotion remains manual
+```
+
+The runner has no privileged builder, host runtime socket, or Kubernetes deployment
+Role. The workflow uses repository `GHCR_TOKEN` secrets and environment
+`GITOPS_TOKEN`; ordinary environment variables are not required. The fine-grained
+GitOps token selects `homelab-infra` and grants Contents read/write. See
+[PIPELINE_SETUP.md](PIPELINE_SETUP.md) for current setup and validation notes.
+
+> The original guide below is retained as implementation history. References to
+> direct `kubectl` deployment, BuildKit sidecars, `dev-testing`, or `main` as the
+> CodeJourney trigger describe the superseded pipeline.
+
+---
+
 # codejourney-ops
 
 CI/CD pipeline and Kubernetes manifests for the [CodeJourney](https://github.com/CodeJohnie/CodeJourney) app running on a k3s home-lab cluster.
