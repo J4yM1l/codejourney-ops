@@ -14,34 +14,14 @@ spec:
         app: github-runner
     spec:
       serviceAccountName: github-runner
-      volumes:
-        - name: containerd-sock
-          hostPath:
-            path: /run/k3s/containerd/containerd.sock
-            type: Socket
-        - name: buildkit-sock
-          emptyDir: {}
       containers:
-        - name: buildkitd
-          image: moby/buildkit:master
-          args:
-            - "--addr"
-            - "unix:///run/buildkit/buildkitd.sock"
-            - "--oci-worker-gc-keepstorage"
-            - "10240"
-          securityContext:
-            privileged: true
-          volumeMounts:
-            - name: buildkit-sock
-              mountPath: /run/buildkit
-
         - name: runner
           image: myoung34/github-runner:latest
           env:
             - name: RUNNER_SCOPE
               value: repo
             - name: REPO_URL
-              value: https://github.com/CodeJohnie/codejourney-ops
+              value: https://github.com/J4yM1l/codejourney-ops
             - name: ACCESS_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -51,21 +31,8 @@ spec:
               value: k3s-homelab
             - name: RUNNER_LABELS
               value: self-hosted,k3s
-            - name: EPHEMERAL
-              value: "false"
             - name: DISABLE_AUTO_UPDATE
               value: "true"
-            - name: BUILDKIT_HOST
-              value: unix:///run/buildkit/buildkitd.sock
-            - name: CONTAINERD_ADDRESS
-              value: /run/k3s/containerd/containerd.sock
-            - name: CONTAINERD_NAMESPACE
-              value: k8s.io
-          volumeMounts:
-            - name: containerd-sock
-              mountPath: /run/k3s/containerd/containerd.sock
-            - name: buildkit-sock
-              mountPath: /run/buildkit
           resources:
             requests:
               cpu: 200m

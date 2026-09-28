@@ -1,106 +1,145 @@
-name: Deploy Pipeline
+name: Publish stage release to Zot
 
 on:
   repository_dispatch:
-    types: [deploy]
+    types: [deploy-stage]
+
+concurrency:
+  group: codejourney-stage-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 env:
-  # NodePort address — resolvable by kubelet on all nodes, configured as
-  # insecure HTTP mirror in /etc/rancher/k3s/registries.yaml on each node
+  SOURCE_REPOSITORY: J4yM1l/CodeJourney
+  SOURCE_BRANCH: poc/agent-visualizer-skills
+  GITOPS_REPOSITORY: J4yM1l/homelab-infra
+  GITOPS_BRANCH: main
   REGISTRY: 192.168.0.45:30080
-  APP: codejourney
-  API_APP: codejourney-api
+  WEB_REPOSITORY: codejourney-stage-web
+  API_REPOSITORY: codejourney-stage-api
+  CRANE_VERSION: 0.22.1
+  CRANE_ARM64_SHA256: 898c0cff975f898a33e8c4580bdafb0e7c02c7faa33374e946762f97c4ab7110
 
 jobs:
-  build-and-deploy:
+  release-stage:
     runs-on: [self-hosted, k3s]
+    timeout-minutes: 30
 
     steps:
-      # An empty ref makes actions/checkout silently fall back to the default
-      # branch — which is precisely the bug below, reappearing quietly. Refuse
-      # to deploy rather than build something nobody asked for.
-      - name: Validate the requested commit
+      - name: Validate dispatch provenance
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          SOURCE_REF: ${{ github.event.client_payload.ref }}
+          DISPATCH_REPOSITORY: ${{ github.event.client_payload.repository }}
+          WEB_CANDIDATE: ${{ github.event.client_payload.web_image }}
+          API_CANDIDATE: ${{ github.event.client_payload.api_image }}
         run: |
-          SHA="${{ github.event.client_payload.sha }}"
-          if [ -z "${SHA}" ]; then
-            echo "::error::client_payload.sha is empty — refusing to deploy."
-            exit 1
-          fi
-          echo "Deploying CodeJourney @ ${SHA}"
+          set -eu
+          test "${SOURCE_REF}" = "refs/heads/${SOURCE_BRANCH}"
+          test "${DISPATCH_REPOSITORY}" = "${SOURCE_REPOSITORY}"
+          echo "${SOURCE_SHA}" | grep -Eq '^[0-9a-f]{40}$'
+          echo "${WEB_CANDIDATE}" | grep -Eq '^ghcr\.io/j4ym1l/codejourney-stage-web@sha256:[0-9a-f]{64}$'
+          echo "${API_CANDIDATE}" | grep -Eq '^ghcr\.io/j4ym1l/codejourney-stage-api@sha256:[0-9a-f]{64}$'
 
-      - name: Checkout CodeJourney source
+      - name: Checkout pipeline source
         uses: actions/checkout@v4
         with:
-          # Renamed from CodeJohnie. GitHub's redirect kept the old path
-          # working, which is why this never broke — but a redirect only lasts
-          # until someone claims the abandoned name.
-          repository: J4yM1l/CodeJourney
-          # Build the exact commit that was dispatched, NOT whatever main
-          # happens to be now. The images below are tagged with this sha, so
-          # checking out a moving ref made the tag a lie whenever a second
-          # commit landed before this runner picked the job up.
-          ref: ${{ github.event.client_payload.sha }}
-          token: ${{ secrets.GHCR_TOKEN }}
-
-      - name: Install nerdctl and buildctl
-        run: |
-          NERDCTL_VERSION=$(curl -s https://api.github.com/repos/containerd/nerdctl/releases/latest | grep tag_name | cut -d'"' -f4 | tr -d v)
-          curl -fsSL "https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-arm64.tar.gz" \
-            | tar -xz -C /usr/local/bin nerdctl
-          BUILDKIT_VERSION=$(curl -s https://api.github.com/repos/moby/buildkit/releases/latest | grep tag_name | cut -d'"' -f4 | tr -d v)
-          curl -fsSL "https://github.com/moby/buildkit/releases/download/v${BUILDKIT_VERSION}/buildkit-v${BUILDKIT_VERSION}.linux-arm64.tar.gz" \
-            | tar -xz -C /usr/local bin/buildctl
-          buildctl --version
-
-      - name: Wait for buildkitd
-        run: |
-          echo "Waiting for buildkitd socket..."
-          until buildctl --addr unix:///run/buildkit/buildkitd.sock debug workers 2>/dev/null; do sleep 2; done
-          echo "buildkitd ready"
-
-      - name: Build and push web image to Zot
-        run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.APP }}:${{ github.event.client_payload.sha }}"
-          LATEST="${{ env.REGISTRY }}/${{ env.APP }}:latest"
-          nerdctl --insecure-registry build --platform linux/arm64 -t "${IMAGE}" -t "${LATEST}" -f Dockerfile .
-          nerdctl --insecure-registry push "${IMAGE}"
-          nerdctl --insecure-registry push "${LATEST}"
-
-      - name: Build and push API image to Zot
-        run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.API_APP }}:${{ github.event.client_payload.sha }}"
-          LATEST="${{ env.REGISTRY }}/${{ env.API_APP }}:latest"
-          nerdctl --insecure-registry build --platform linux/arm64 -t "${IMAGE}" -t "${LATEST}" -f Dockerfile.api .
-          nerdctl --insecure-registry push "${IMAGE}"
-          nerdctl --insecure-registry push "${LATEST}"
-
-      - name: Install kubectl
-        run: |
-          curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/arm64/kubectl"
-          chmod +x kubectl && mv kubectl /usr/local/bin/kubectl
-
-      - name: Checkout ops repo (for k8s manifests)
-        uses: actions/checkout@v4
-        with:
-          repository: J4yM1l/codejourney-ops
-          token: ${{ secrets.GHCR_TOKEN }}
           path: ops
 
-      - name: Apply infrastructure (postgres, redis) — idempotent
+      - name: Install checksum-verified crane
         run: |
-          kubectl apply -f ops/k8s/postgres.yaml
-          kubectl apply -f ops/k8s/redis.yaml
+          set -eu
+          archive=/tmp/go-containerregistry_Linux_arm64.tar.gz
+          curl -fsSLo "${archive}" \
+            "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz"
+          echo "${CRANE_ARM64_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "${archive}" -C /tmp crane
+          install -m 0755 /tmp/crane /usr/local/bin/crane
+          crane version
 
-      - name: Deploy web app
+      - name: Authenticate to the candidate registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.APP }}:${{ github.event.client_payload.sha }}"
-          # Always apply the rendered manifest so image AND manifest changes
-          # (probes, env vars, resources) reach the cluster together.
-          sed "s|IMAGE_PLACEHOLDER|${IMAGE}|g" ops/k8s/deployment.yaml | kubectl apply -f -
-          kubectl rollout status deployment/${{ env.APP }} -n dev-testing --timeout=300s
+          set -eu
+          printf '%s' "${GHCR_TOKEN}" | crane auth login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
 
-      - name: Deploy API
+      - name: Copy validated AMD64 images into Zot
+        id: images
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          WEB_CANDIDATE: ${{ github.event.client_payload.web_image }}
+          API_CANDIDATE: ${{ github.event.client_payload.api_image }}
         run: |
-          API_IMAGE="${{ env.REGISTRY }}/${{ env.API_APP }}:${{ github.event.client_payload.sha }}"
-          sed "s|API_IMAGE_PLACEHOLDER|${API_IMAGE}|g" ops/k8s/api-deployment.yaml | kubectl apply -f -
-          kubectl rollout status deployment/${{ env.API_APP }} -n dev-testing --timeout=300s
+          set -eu
+          web_tag="${REGISTRY}/${WEB_REPOSITORY}:${SOURCE_SHA}"
+          api_tag="${REGISTRY}/${API_REPOSITORY}:${SOURCE_SHA}"
+          crane copy --insecure "${WEB_CANDIDATE}" "${web_tag}"
+          crane copy --insecure "${API_CANDIDATE}" "${api_tag}"
+          web_digest="$(crane digest --insecure "${web_tag}")"
+          api_digest="$(crane digest --insecure "${api_tag}")"
+          test "${WEB_CANDIDATE##*@}" = "${web_digest}"
+          test "${API_CANDIDATE##*@}" = "${api_digest}"
+          echo "web_image=${REGISTRY}/${WEB_REPOSITORY}@${web_digest}" >> "${GITHUB_OUTPUT}"
+          echo "api_image=${REGISTRY}/${API_REPOSITORY}@${api_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout GitOps source of truth
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPOSITORY }}
+          ref: ${{ env.GITOPS_BRANCH }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Update stage manifests by digest
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          WEB_IMAGE: ${{ steps.images.outputs.web_image }}
+          API_IMAGE: ${{ steps.images.outputs.api_image }}
+        run: |
+          set -eu
+          python3 ops/scripts/update-stage-manifests.py \
+            --gitops-dir gitops \
+            --source-revision "${SOURCE_SHA}" \
+            --web-image "${WEB_IMAGE}" \
+            --api-image "${API_IMAGE}"
+
+      - name: Commit GitOps release
+        working-directory: gitops
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -eu
+          if git diff --quiet; then
+            echo "Stage already references CodeJourney ${SOURCE_SHA}."
+            exit 0
+          fi
+          git diff --check
+          git config user.name "codejourney-release-bot"
+          git config user.email "codejourney-release-bot@users.noreply.github.com"
+          git add clusters/stage/applications/codejourney/api.yaml \
+            clusters/stage/applications/codejourney/web.yaml
+          git commit \
+            -m "deploy(stage): CodeJourney ${SOURCE_SHA:0:12}" \
+            -m "Source: https://github.com/${SOURCE_REPOSITORY}/commit/${SOURCE_SHA}" \
+            -m "Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          git push origin "HEAD:${GITOPS_BRANCH}"
+
+      - name: Publish release summary
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          WEB_IMAGE: ${{ steps.images.outputs.web_image }}
+          API_IMAGE: ${{ steps.images.outputs.api_image }}
+        run: |
+          {
+            echo "## CodeJourney stage release"
+            echo
+            echo "- Source branch: \`${SOURCE_BRANCH}\`"
+            echo "- Source revision: \`${SOURCE_SHA}\`"
+            echo "- Web: \`${WEB_IMAGE}\`"
+            echo "- API: \`${API_IMAGE}\`"
+            echo "- Deployment: Argo CD auto-syncs \`stage-codejourney\` from \`${GITOPS_BRANCH}\`"
+            echo "- Production: unchanged; promotion remains manual"
+          } >> "${GITHUB_STEP_SUMMARY}"
