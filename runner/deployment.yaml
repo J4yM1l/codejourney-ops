@@ -30,7 +30,7 @@ spec:
             - name: RUNNER_NAME
               value: k3s-homelab
             - name: RUNNER_LABELS
-              value: self-hosted,k3s
+              value: self-hosted,k3s-gitops
             - name: DISABLE_AUTO_UPDATE
               value: "true"
           resources:
