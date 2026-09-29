@@ -47,3 +47,20 @@ jobs:
             fi
           done
           exit "${fail}"
+      # The runner's ACCESS_TOKEN lives only in the cluster (homelab-infra
+      # clusters/edge/workloads/ci/runner-secrets.sops.yaml), so its expiry is recorded
+      # here by date instead of being read from GitHub. Without a valid token the
+      # runner cannot re-register after a restart. Update the date when rotating.
+      - name: Check runner ACCESS_TOKEN expiry (recorded date)
+        if: always()
+        env:
+          RUNNER_TOKEN_EXPIRES: "2026-12-28T15:47:29Z"
+          WARN_DAYS: "21"
+        run: |
+          set -eu
+          days=$(( ( $(date -d "${RUNNER_TOKEN_EXPIRES}" +%s) - $(date +%s) ) / 86400 ))
+          echo "runner ACCESS_TOKEN: expires ${RUNNER_TOKEN_EXPIRES} (${days} days)"
+          if [ "${days}" -lt "${WARN_DAYS}" ]; then
+            echo "::error::runner ACCESS_TOKEN expires in ${days} days; create a fine-grained token (codejourney-ops, Administration read/write), update runner-secrets in homelab-infra and this date"
+            exit 1
+          fi
