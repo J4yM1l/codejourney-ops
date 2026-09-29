@@ -94,16 +94,18 @@ jobs:
           API_CANDIDATE: ${{ github.event.client_payload.api_image }}
         run: |
           set -eu
-          web_tag="${REGISTRY}/${WEB_REPOSITORY}:${SOURCE_SHA}"
-          api_tag="${REGISTRY}/${API_REPOSITORY}:${SOURCE_SHA}"
+          # Tag stage-<12-char SHA>, the form the stage manifests reference.
+          release_tag="stage-${SOURCE_SHA:0:12}"
+          web_tag="${REGISTRY}/${WEB_REPOSITORY}:${release_tag}"
+          api_tag="${REGISTRY}/${API_REPOSITORY}:${release_tag}"
           crane copy "${WEB_CANDIDATE}" "${web_tag}"
           crane copy "${API_CANDIDATE}" "${api_tag}"
           web_digest="$(crane digest "${web_tag}")"
           api_digest="$(crane digest "${api_tag}")"
           test "${WEB_CANDIDATE##*@}" = "${web_digest}"
           test "${API_CANDIDATE##*@}" = "${api_digest}"
-          echo "web_image=${REGISTRY}/${WEB_REPOSITORY}@${web_digest}" >> "${GITHUB_OUTPUT}"
-          echo "api_image=${REGISTRY}/${API_REPOSITORY}@${api_digest}" >> "${GITHUB_OUTPUT}"
+          echo "web_image=${web_tag}@${web_digest}" >> "${GITHUB_OUTPUT}"
+          echo "api_image=${api_tag}@${api_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout GitOps source of truth
         uses: actions/checkout@v4
