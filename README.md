@@ -75,6 +75,15 @@ Prerequisites:
   `https://192.168.0.45:6443` (the master's LAN IP)
 - Same LAN as the cluster (the registry is `192.168.0.45:30080`)
 
+> **Zot requires TLS and authentication since 2026-09-29** (homelab-infra ADR-017).
+> Pulls stay anonymous, but pushes need a login, and Zot now only speaks HTTPS with a
+> Homelab CA certificate (`certs/homelab-root-ca.crt`). `deploy.sh` still runs
+> `podman push --tls-verify=false` without logging in, so **the local path fails with
+> 401 until `deploy.sh` is updated**. It must trust the CA inside the podman machine
+> (`/etc/containers/certs.d/192.168.0.45:30080/ca.crt`) and log in first. In addition,
+> the `codejourney-api` repository in Zot has a corrupt index (see homelab-infra
+> `docs/inventory/2026-09-29-zot-tls-auth.md`).
+
 Caveats:
 - Local deploys are **temporary by design**: the next push to `main`
   rebuilds from committed code and overwrites the `local-*` image.
