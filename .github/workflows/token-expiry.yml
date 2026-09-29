@@ -1,0 +1,49 @@
+name: Check token expiry
+
+# GHCR_TOKEN expired unnoticed on 2026-09-29 and blocked stage releases. This job
+# reads GitHub's GitHub-Authentication-Token-Expiration response header for each
+# token and fails when one expires within WARN_DAYS, so GitHub emails the owner.
+
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: GITOPS_TOKEN
+    timeout-minutes: 5
+    steps:
+      - name: Check GHCR_TOKEN and GITOPS_TOKEN expiry
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          WARN_DAYS: "21"
+        run: |
+          set -eu
+          fail=0
+          for name in GHCR_TOKEN GITOPS_TOKEN; do
+            token="${!name}"
+            if [ -z "${token}" ]; then
+              echo "::error::${name} is not available to this job"; fail=1; continue
+            fi
+            headers="$(curl -sS -o /dev/null -D - -H "Authorization: Bearer ${token}" https://api.github.com/rate_limit | tr -d '\r')"
+            status="$(printf '%s\n' "${headers}" | awk 'NR==1 {print $2}')"
+            if [ "${status}" != "200" ]; then
+              echo "::error::${name} was rejected by the GitHub API (HTTP ${status}); it is invalid or expired"; fail=1; continue
+            fi
+            expiry="$(printf '%s\n' "${headers}" | awk -F': ' 'tolower($1)=="github-authentication-token-expiration" {print $2}')"
+            if [ -z "${expiry}" ]; then
+              echo "${name}: no expiration date"; continue
+            fi
+            days=$(( ( $(date -d "${expiry}" +%s) - $(date +%s) ) / 86400 ))
+            echo "${name}: expires ${expiry} (${days} days)"
+            if [ "${days}" -lt "${WARN_DAYS}" ]; then
+              echo "::error::${name} expires in ${days} days (${expiry}); create a new token and update the secret"; fail=1
+            fi
+          done
+          exit "${fail}"
