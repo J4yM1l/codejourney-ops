@@ -16,7 +16,10 @@ env:
   SOURCE_BRANCH: poc/agent-visualizer-skills
   GITOPS_REPOSITORY: J4yM1l/homelab-infra
   GITOPS_BRANCH: main
+  # Zot serves HTTPS with a Homelab CA certificate and requires ci-pusher to push
+  # (homelab-infra ADR-017).
   REGISTRY: 192.168.0.45:30080
+  ZOT_PUSH_USER: ci-pusher
   WEB_REPOSITORY: codejourney-stage-web
   API_REPOSITORY: codejourney-stage-api
   CRANE_VERSION: 0.22.1
@@ -67,6 +70,22 @@ jobs:
           set -eu
           printf '%s' "${GHCR_TOKEN}" | crane auth login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
 
+      - name: Trust the Homelab root CA for Zot
+        run: |
+          set -eu
+          # System roots are kept (ghcr.io) and the Homelab root CA is added (Zot).
+          bundle="${RUNNER_TEMP}/ca-bundle.pem"
+          cat /etc/ssl/certs/ca-certificates.crt ops/certs/homelab-root-ca.crt > "${bundle}"
+          echo "SSL_CERT_FILE=${bundle}" >> "${GITHUB_ENV}"
+
+      - name: Authenticate to Zot
+        env:
+          ZOT_PUSH_PASSWORD: ${{ secrets.ZOT_PUSH_PASSWORD }}
+        run: |
+          set -eu
+          test -n "${ZOT_PUSH_PASSWORD}"
+          printf '%s' "${ZOT_PUSH_PASSWORD}" | crane auth login "${REGISTRY}" -u "${ZOT_PUSH_USER}" --password-stdin
+
       - name: Copy validated AMD64 images into Zot
         id: images
         env:
@@ -77,10 +96,10 @@ jobs:
           set -eu
           web_tag="${REGISTRY}/${WEB_REPOSITORY}:${SOURCE_SHA}"
           api_tag="${REGISTRY}/${API_REPOSITORY}:${SOURCE_SHA}"
-          crane copy --insecure "${WEB_CANDIDATE}" "${web_tag}"
-          crane copy --insecure "${API_CANDIDATE}" "${api_tag}"
-          web_digest="$(crane digest --insecure "${web_tag}")"
-          api_digest="$(crane digest --insecure "${api_tag}")"
+          crane copy "${WEB_CANDIDATE}" "${web_tag}"
+          crane copy "${API_CANDIDATE}" "${api_tag}"
+          web_digest="$(crane digest "${web_tag}")"
+          api_digest="$(crane digest "${api_tag}")"
           test "${WEB_CANDIDATE##*@}" = "${web_digest}"
           test "${API_CANDIDATE##*@}" = "${api_digest}"
           echo "web_image=${REGISTRY}/${WEB_REPOSITORY}@${web_digest}" >> "${GITHUB_OUTPUT}"
@@ -144,3 +163,7 @@ jobs:
             echo "- Deployment: Argo CD auto-syncs \`stage-codejourney\` from \`${GITOPS_BRANCH}\`"
             echo "- Production: unchanged; promotion remains manual"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Remove Zot credential from the runner
+        if: always()
+        run: crane auth logout "${REGISTRY}" || true
