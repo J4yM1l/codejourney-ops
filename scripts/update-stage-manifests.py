@@ -10,7 +10,9 @@ import re
 
 IMAGE_PATTERN = re.compile(
     r"^([ ]+image: )192\.168\.0\.(?:45|47):30080/"
-    r"(codejourney-stage-(?:web|api))@sha256:[0-9a-f]{64}$",
+    # An optional tag (e.g. :stage-4d91a2bbecec) may precede the digest; the digest
+    # is what containerd pulls.
+    r"(codejourney-stage-(?:web|api))(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[0-9a-f]{64}$",
     re.MULTILINE,
 )
 REVISION_PATTERN = re.compile(
@@ -49,7 +51,7 @@ def main() -> None:
         (args.web_image, "codejourney-stage-web"),
         (args.api_image, "codejourney-stage-api"),
     ):
-        expected = rf"192\.168\.0\.(?:45|47):30080/{repository}@sha256:[0-9a-f]{{64}}"
+        expected = rf"192\.168\.0\.(?:45|47):30080/{repository}(?::stage-[0-9a-f]{{12}})?@sha256:[0-9a-f]{{64}}"
         if not re.fullmatch(expected, image):
             raise SystemExit(f"invalid immutable image reference: {image}")
 
