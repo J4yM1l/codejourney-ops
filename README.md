@@ -2,7 +2,9 @@
 
 Release pipeline for [CodeJourney](https://github.com/J4yM1l/CodeJourney). It copies
 CI-built images into the homelab Zot registry and hands the stage release to Argo CD
-by committing image digests to `homelab-infra`. It holds no Kubernetes manifests.
+by committing image digests to
+[`homelab-release-state`](https://github.com/J4yM1l/homelab-release-state). It cannot
+write `homelab-infra` (homelab-infra ADR-021). It holds no Kubernetes manifests.
 Every cluster object, including the runner that executes this pipeline, is managed
 by Argo CD from [homelab-infra](https://github.com/J4yM1l/homelab-infra).
 
@@ -13,8 +15,9 @@ push or merge to main (CodeJourney, reviewed through a pull request)
   -> GitHub-hosted AMD64 lint, typecheck, test, build, and GHCR publish
   -> repository_dispatch (deploy-stage) to codejourney-ops
   -> k3s-gitops runner copies the exact digests to Zot (crane, TLS, ci-pusher login)
-  -> scripts/update-stage-manifests.py commits the digests to homelab-infra/main
-  -> Argo CD syncs stage-codejourney
+  -> scripts/update-stage-manifests.py commits the digests to homelab-release-state/main
+     (apps/codejourney/stage/{web,api}-deployment.yaml)
+  -> Argo CD syncs stage-codejourney-release (plain YAML, Deployments only)
   -> production promotion remains manual (homelab-infra runbook codejourney-release)
 ```
 

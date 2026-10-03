@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Update only CodeJourney stage image digests and source-revision annotations."""
+"""Update only CodeJourney stage image digests and source-revision annotations
+in the release-state repository (homelab-infra ADR-021)."""
 
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ def update(path: pathlib.Path, repository: str, image: str, revision: str) -> No
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gitops-dir", required=True, type=pathlib.Path)
+    parser.add_argument("--state-dir", required=True, type=pathlib.Path)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--web-image", required=True)
     parser.add_argument("--api-image", required=True)
@@ -55,9 +56,9 @@ def main() -> None:
         if not re.fullmatch(expected, image):
             raise SystemExit(f"invalid immutable image reference: {image}")
 
-    base = args.gitops_dir / "clusters/stage/applications/codejourney"
-    update(base / "web.yaml", "codejourney-stage-web", args.web_image, args.source_revision)
-    update(base / "api.yaml", "codejourney-stage-api", args.api_image, args.source_revision)
+    base = args.state_dir / "apps/codejourney/stage"
+    update(base / "web-deployment.yaml", "codejourney-stage-web", args.web_image, args.source_revision)
+    update(base / "api-deployment.yaml", "codejourney-stage-api", args.api_image, args.source_revision)
 
 
 if __name__ == "__main__":

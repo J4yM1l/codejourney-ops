@@ -15,8 +15,10 @@ env:
   SOURCE_REPOSITORY: J4yM1l/CodeJourney
   # Releases come only from reviewed CodeJourney main (homelab-infra plan P3.1, F-019).
   SOURCE_BRANCH: main
-  GITOPS_REPOSITORY: J4yM1l/homelab-infra
-  GITOPS_BRANCH: main
+  # Stage release state lives in its own repository; this pipeline cannot write
+  # homelab-infra (homelab-infra ADR-021, remediation P1.6).
+  RELEASE_STATE_REPOSITORY: J4yM1l/homelab-release-state
+  RELEASE_STATE_BRANCH: main
   # Zot serves HTTPS with a Homelab CA certificate and requires ci-pusher to push
   # (homelab-infra ADR-017).
   REGISTRY: 192.168.0.45:30080
@@ -116,15 +118,15 @@ jobs:
           echo "web_image=${web_tag}@${web_digest}" >> "${GITHUB_OUTPUT}"
           echo "api_image=${api_tag}@${api_digest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Checkout GitOps source of truth
+      - name: Checkout release state
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ env.GITOPS_REPOSITORY }}
-          ref: ${{ env.GITOPS_BRANCH }}
-          token: ${{ secrets.GITOPS_TOKEN }}
-          path: gitops
-          # Do not leave the token in gitops/.git/config for later steps; only the push
-          # step below receives it.
+          repository: ${{ env.RELEASE_STATE_REPOSITORY }}
+          ref: ${{ env.RELEASE_STATE_BRANCH }}
+          token: ${{ secrets.RELEASE_STATE_TOKEN }}
+          path: release-state
+          # Do not leave the token in release-state/.git/config for later steps; only the
+          # push step below receives it.
           persist-credentials: false
 
       - name: Update stage manifests by digest
@@ -135,16 +137,16 @@ jobs:
         run: |
           set -eu
           python3 ops/scripts/update-stage-manifests.py \
-            --gitops-dir gitops \
+            --state-dir release-state \
             --source-revision "${SOURCE_SHA}" \
             --web-image "${WEB_IMAGE}" \
             --api-image "${API_IMAGE}"
 
-      - name: Commit GitOps release
-        working-directory: gitops
+      - name: Commit release state
+        working-directory: release-state
         env:
           SOURCE_SHA: ${{ github.event.client_payload.sha }}
-          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          RELEASE_STATE_TOKEN: ${{ secrets.RELEASE_STATE_TOKEN }}
         run: |
           set -eu
           if git diff --quiet; then
@@ -154,8 +156,8 @@ jobs:
           git diff --check
           git config user.name "codejourney-release-bot"
           git config user.email "codejourney-release-bot@users.noreply.github.com"
-          git add clusters/stage/applications/codejourney/api.yaml \
-            clusters/stage/applications/codejourney/web.yaml
+          git add apps/codejourney/stage/api-deployment.yaml \
+            apps/codejourney/stage/web-deployment.yaml
           git commit \
             -m "deploy(stage): CodeJourney ${SOURCE_SHA:0:12}" \
             -m "Source: https://github.com/${SOURCE_REPOSITORY}/commit/${SOURCE_SHA}" \
@@ -163,8 +165,8 @@ jobs:
           # The credential helper reads the token from the environment when git asks
           # for it, so the token never appears in a URL, argv or .git/config.
           git -c credential.helper= \
-            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=${GITOPS_TOKEN}"; }; f' \
-            push origin "HEAD:${GITOPS_BRANCH}"
+            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=${RELEASE_STATE_TOKEN}"; }; f' \
+            push origin "HEAD:${RELEASE_STATE_BRANCH}"
 
       - name: Publish release summary
         env:
@@ -179,7 +181,7 @@ jobs:
             echo "- Source revision: \`${SOURCE_SHA}\`"
             echo "- Web: \`${WEB_IMAGE}\`"
             echo "- API: \`${API_IMAGE}\`"
-            echo "- Deployment: Argo CD auto-syncs \`stage-codejourney\` from \`${GITOPS_BRANCH}\`"
+            echo "- Deployment: Argo CD auto-syncs \`stage-codejourney-release\` from \`${RELEASE_STATE_REPOSITORY}\`"
             echo "- Production: unchanged; promotion remains manual"
           } >> "${GITHUB_STEP_SUMMARY}"
 

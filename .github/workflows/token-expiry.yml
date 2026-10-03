@@ -18,15 +18,15 @@ jobs:
     environment: GITOPS_TOKEN
     timeout-minutes: 5
     steps:
-      - name: Check GHCR_TOKEN and GITOPS_TOKEN expiry
+      - name: Check GHCR_TOKEN and RELEASE_STATE_TOKEN expiry
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          RELEASE_STATE_TOKEN: ${{ secrets.RELEASE_STATE_TOKEN }}
           WARN_DAYS: "21"
         run: |
           set -eu
           fail=0
-          for name in GHCR_TOKEN GITOPS_TOKEN; do
+          for name in GHCR_TOKEN RELEASE_STATE_TOKEN; do
             token="${!name}"
             if [ -z "${token}" ]; then
               echo "::error::${name} is not available to this job"; fail=1; continue
