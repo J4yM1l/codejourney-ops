@@ -1,6 +1,6 @@
 # codejourney-ops
 
-Release pipeline for [CodeJourney](https://github.com/CodeJohnie/CodeJourney). It copies
+Release pipeline for [CodeJourney](https://github.com/J4yM1l/CodeJourney). It copies
 CI-built images into the homelab Zot registry and hands the stage release to Argo CD
 by committing image digests to `homelab-infra`. It holds no Kubernetes manifests.
 Every cluster object, including the runner that executes this pipeline, is managed
