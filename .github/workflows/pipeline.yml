@@ -13,7 +13,8 @@ permissions:
 
 env:
   SOURCE_REPOSITORY: J4yM1l/CodeJourney
-  SOURCE_BRANCH: poc/agent-visualizer-skills
+  # Releases come only from reviewed CodeJourney main (homelab-infra plan P3.1, F-019).
+  SOURCE_BRANCH: main
   GITOPS_REPOSITORY: J4yM1l/homelab-infra
   GITOPS_BRANCH: main
   # Zot serves HTTPS with a Homelab CA certificate and requires ci-pusher to push

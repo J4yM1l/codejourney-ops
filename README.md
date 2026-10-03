@@ -9,8 +9,8 @@ by Argo CD from [homelab-infra](https://github.com/J4yM1l/homelab-infra).
 ## Release path (stage)
 
 ```text
-push poc/agent-visualizer-skills (CodeJourney)
-  -> GitHub-hosted AMD64 typecheck, test, build, and GHCR publish
+push or merge to main (CodeJourney, reviewed through a pull request)
+  -> GitHub-hosted AMD64 lint, typecheck, test, build, and GHCR publish
   -> repository_dispatch (deploy-stage) to codejourney-ops
   -> k3s-gitops runner copies the exact digests to Zot (crane, TLS, ci-pusher login)
   -> scripts/update-stage-manifests.py commits the digests to homelab-infra/main

@@ -1,7 +1,7 @@
 # GitHub Actions to Argo CD setup
 
-GitHub-hosted runners validate and build AMD64 candidates from
-`poc/agent-visualizer-skills`, publish immutable GHCR digests, and dispatch them to
+GitHub-hosted runners validate and build AMD64 candidates from CodeJourney `main`
+(changes reach it only through reviewed pull requests), publish immutable GHCR digests, and dispatch them to
 `codejourney-ops`. The dedicated `k3s-gitops` runner uses checksum-verified `crane`
 to copy those digests to Zot at `192.168.0.45:30080` over TLS (Homelab CA in
 `certs/`), logged in as `ci-pusher`. It verifies the digests are equal, then commits
