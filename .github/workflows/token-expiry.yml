@@ -15,6 +15,10 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Historical environment name: it holds RELEASE_STATE_TOKEN and ZOT_PUSH_PASSWORD
+    # (deployment branches: main only). The GITOPS_TOKEN secret was deleted and its PAT
+    # revoked on 2026-10-03 (homelab-infra ADR-021). GitHub cannot rename environments;
+    # it is replaced when this pipeline is generalised (homelab-infra plan D-13).
     environment: GITOPS_TOKEN
     timeout-minutes: 5
     steps:
