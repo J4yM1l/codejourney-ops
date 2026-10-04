@@ -14,8 +14,10 @@ Required GitHub configuration:
 - `CodeJourney` repository secret `GHCR_TOKEN`: dispatch access to
   `codejourney-ops` (fine-grained, Contents read/write on `codejourney-ops`).
 - `codejourney-ops` repository secret `GHCR_TOKEN`: read candidate packages.
-- `codejourney-ops` environment `GITOPS_TOKEN` (name kept for now; deployment
-  branches: `main` only), containing secrets:
+- `codejourney-ops` environment `GITOPS_TOKEN` (**historical name**: the `GITOPS_TOKEN`
+  secret no longer exists and its PAT is revoked; GitHub cannot rename environments,
+  so it is replaced when the pipeline is generalised; deployment branches: `main`
+  only), containing secrets:
   - `RELEASE_STATE_TOKEN`: fine-grained token selecting **only**
     `homelab-release-state`, Contents read/write;
   - `ZOT_PUSH_PASSWORD`: password of Zot user `ci-pusher` (homelab-infra ADR-017).
