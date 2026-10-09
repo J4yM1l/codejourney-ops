@@ -1,0 +1,177 @@
+name: Publish Book Library stage release to Zot
+# Second application on the release path of pipeline.yml (homelab-infra ADR-021): the
+# same runner, credentials and checks, one image. Book Library's CI publishes a GHCR
+# candidate from main and dispatches deploy-book-library-stage; this workflow copies
+# it into Zot and commits its digest to homelab-release-state.
+
+on:
+  repository_dispatch:
+    types: [deploy-book-library-stage]
+
+concurrency:
+  group: book-library-stage-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: J4yM1l/book-library
+  SOURCE_BRANCH: main
+  CANDIDATE_PATTERN: '^ghcr\.io/j4ym1l/book-library@sha256:[0-9a-f]{64}$'
+  RELEASE_STATE_REPOSITORY: J4yM1l/homelab-release-state
+  RELEASE_STATE_BRANCH: main
+  RELEASE_STATE_FILE: apps/book-library/stage/app-deployment.yaml
+  REGISTRY: 192.168.0.45:30080
+  ZOT_PUSH_USER: ci-pusher
+  ZOT_REPOSITORY: book-library-stage
+  CRANE_VERSION: 0.22.1
+  CRANE_ARM64_SHA256: 898c0cff975f898a33e8c4580bdafb0e7c02c7faa33374e946762f97c4ab7110
+
+jobs:
+  release-stage:
+    # Environment holding RELEASE_STATE_TOKEN, ZOT_PUSH_PASSWORD and GHCR_TOKEN
+    # (deployment branches: main only); historical name, see pipeline.yml.
+    environment: GITOPS_TOKEN
+    runs-on: [self-hosted, k3s-gitops]
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate dispatch provenance
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          SOURCE_REF: ${{ github.event.client_payload.ref }}
+          DISPATCH_REPOSITORY: ${{ github.event.client_payload.repository }}
+          CANDIDATE: ${{ github.event.client_payload.image }}
+        run: |
+          set -eu
+          test "${SOURCE_REF}" = "refs/heads/${SOURCE_BRANCH}"
+          test "${DISPATCH_REPOSITORY}" = "${SOURCE_REPOSITORY}"
+          echo "${SOURCE_SHA}" | grep -Eq '^[0-9a-f]{40}$'
+          echo "${CANDIDATE}" | grep -Eq "${CANDIDATE_PATTERN}"
+
+      - name: Checkout pipeline source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: ops
+          persist-credentials: false
+
+      - name: Install checksum-verified crane
+        run: |
+          set -eu
+          bin="${RUNNER_TEMP}/bin"
+          mkdir -p "${bin}" "${RUNNER_TEMP}/docker"
+          archive="${RUNNER_TEMP}/go-containerregistry_Linux_arm64.tar.gz"
+          curl -fsSLo "${archive}" \
+            "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_arm64.tar.gz"
+          echo "${CRANE_ARM64_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "${archive}" -C "${bin}" crane
+          chmod 0755 "${bin}/crane"
+          echo "${bin}" >> "${GITHUB_PATH}"
+          echo "DOCKER_CONFIG=${RUNNER_TEMP}/docker" >> "${GITHUB_ENV}"
+
+      - name: Authenticate to the candidate registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -eu
+          printf '%s' "${GHCR_TOKEN}" | crane auth login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Trust the Homelab root CA for Zot
+        run: |
+          set -eu
+          bundle="${RUNNER_TEMP}/ca-bundle.pem"
+          cat /etc/ssl/certs/ca-certificates.crt ops/certs/homelab-root-ca.crt > "${bundle}"
+          echo "SSL_CERT_FILE=${bundle}" >> "${GITHUB_ENV}"
+
+      - name: Authenticate to Zot
+        env:
+          ZOT_PUSH_PASSWORD: ${{ secrets.ZOT_PUSH_PASSWORD }}
+        run: |
+          set -eu
+          test -n "${ZOT_PUSH_PASSWORD}"
+          printf '%s' "${ZOT_PUSH_PASSWORD}" | crane auth login "${REGISTRY}" -u "${ZOT_PUSH_USER}" --password-stdin
+
+      - name: Copy the validated image into Zot
+        id: image
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          CANDIDATE: ${{ github.event.client_payload.image }}
+        run: |
+          set -eu
+          tag="${REGISTRY}/${ZOT_REPOSITORY}:stage-${SOURCE_SHA:0:12}"
+          crane copy "${CANDIDATE}" "${tag}"
+          digest="$(crane digest "${tag}")"
+          # The digest in Zot must be exactly the one CI built and dispatched.
+          test "${CANDIDATE##*@}" = "${digest}"
+          echo "image=${tag}@${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout release state
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ env.RELEASE_STATE_REPOSITORY }}
+          ref: ${{ env.RELEASE_STATE_BRANCH }}
+          token: ${{ secrets.RELEASE_STATE_TOKEN }}
+          path: release-state
+          persist-credentials: false
+
+      - name: Update the stage Deployment by digest
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          set -eu
+          python3 ops/scripts/update-release-image.py \
+            --file "release-state/${RELEASE_STATE_FILE}" \
+            --repository "${ZOT_REPOSITORY}" \
+            --image "${IMAGE}" \
+            --source-revision "${SOURCE_SHA}"
+
+      - name: Commit release state
+        working-directory: release-state
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          RELEASE_STATE_TOKEN: ${{ secrets.RELEASE_STATE_TOKEN }}
+        run: |
+          set -eu
+          if git diff --quiet; then
+            echo "Stage already references Book Library ${SOURCE_SHA}."
+            exit 0
+          fi
+          git diff --check
+          git config user.name "codejourney-release-bot"
+          git config user.email "codejourney-release-bot@users.noreply.github.com"
+          git add "${RELEASE_STATE_FILE}"
+          git commit \
+            -m "deploy(stage): Book Library ${SOURCE_SHA:0:12}" \
+            -m "Source: https://github.com/${SOURCE_REPOSITORY}/commit/${SOURCE_SHA}" \
+            -m "Workflow: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          # Pull first: a CodeJourney release may have pushed in the meantime (the two
+          # workflows have separate concurrency groups and touch different files).
+          git -c credential.helper= \
+            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=${RELEASE_STATE_TOKEN}"; }; f' \
+            pull --rebase origin "${RELEASE_STATE_BRANCH}"
+          git -c credential.helper= \
+            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=${RELEASE_STATE_TOKEN}"; }; f' \
+            push origin "HEAD:${RELEASE_STATE_BRANCH}"
+
+      - name: Publish release summary
+        env:
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          {
+            echo "## Book Library stage release"
+            echo
+            echo "- Source revision: \`${SOURCE_SHA}\`"
+            echo "- Image: \`${IMAGE}\`"
+            echo "- Release state: \`${RELEASE_STATE_REPOSITORY}/${RELEASE_STATE_FILE}\`"
+            echo "- Deployment: Argo CD auto-syncs \`stage-book-library-release\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Remove registry credentials from the runner
+        if: always()
+        run: |
+          crane auth logout "${REGISTRY}" || true
+          crane auth logout ghcr.io || true
+          rm -rf "${RUNNER_TEMP}/docker"
