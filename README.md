@@ -25,6 +25,15 @@ The runner has no privileged builder, no host runtime socket and no Kubernetes
 Role. See [PIPELINE_SETUP.md](PIPELINE_SETUP.md) for the required secrets, how to
 validate a release, and troubleshooting.
 
+## Other applications
+
+[Book Library](https://github.com/J4yM1l/book-library) uses the same path with its own
+workflow, `.github/workflows/book-library-release.yml` (dispatch type
+`deploy-book-library-stage`, Zot repository `book-library-stage`, release-state file
+`apps/book-library/stage/app-deployment.yaml`), and the generic
+`scripts/update-release-image.py`. Walkthrough: homelab-infra
+`docs/runbooks/book-library.md`.
+
 ## Where things live
 
 | What | Where |
