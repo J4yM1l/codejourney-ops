@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Update only CodeJourney stage image digests and source-revision annotations
-in the release-state repository (homelab-infra ADR-021)."""
+"""Update only CodeJourney image digests and source-revision annotations in the
+release-state repository: stage (homelab-infra ADR-021) or production (ADR-027)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ IMAGE_PATTERN = re.compile(
     r"^([ ]+image: )192\.168\.0\.(?:45|47):30080/"
     # An optional tag (e.g. :stage-4d91a2bbecec) may precede the digest; the digest
     # is what containerd pulls.
-    r"(codejourney-stage-(?:web|api))(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[0-9a-f]{64}$",
+    r"(codejourney-(?:stage|prod)-(?:web|api))(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[0-9a-f]{64}$",
     re.MULTILINE,
 )
 REVISION_PATTERN = re.compile(
@@ -41,6 +41,7 @@ def update(path: pathlib.Path, repository: str, image: str, revision: str) -> No
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-dir", required=True, type=pathlib.Path)
+    parser.add_argument("--environment", choices=("stage", "prod"), default="stage")
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--web-image", required=True)
     parser.add_argument("--api-image", required=True)
@@ -48,17 +49,20 @@ def main() -> None:
 
     if not re.fullmatch(r"[0-9a-f]{40}", args.source_revision):
         raise SystemExit("source revision must be a full lowercase Git SHA")
+    env = args.environment
+    web_repository = f"codejourney-{env}-web"
+    api_repository = f"codejourney-{env}-api"
     for image, repository in (
-        (args.web_image, "codejourney-stage-web"),
-        (args.api_image, "codejourney-stage-api"),
+        (args.web_image, web_repository),
+        (args.api_image, api_repository),
     ):
-        expected = rf"192\.168\.0\.(?:45|47):30080/{repository}(?::stage-[0-9a-f]{{12}})?@sha256:[0-9a-f]{{64}}"
+        expected = rf"192\.168\.0\.(?:45|47):30080/{repository}(?::{env}-[0-9a-f]{{12}})?@sha256:[0-9a-f]{{64}}"
         if not re.fullmatch(expected, image):
             raise SystemExit(f"invalid immutable image reference: {image}")
 
-    base = args.state_dir / "apps/codejourney/stage"
-    update(base / "web-deployment.yaml", "codejourney-stage-web", args.web_image, args.source_revision)
-    update(base / "api-deployment.yaml", "codejourney-stage-api", args.api_image, args.source_revision)
+    base = args.state_dir / "apps/codejourney" / env
+    update(base / "web-deployment.yaml", web_repository, args.web_image, args.source_revision)
+    update(base / "api-deployment.yaml", api_repository, args.api_image, args.source_revision)
 
 
 if __name__ == "__main__":

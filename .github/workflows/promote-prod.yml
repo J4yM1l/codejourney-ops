@@ -1,11 +1,15 @@
-name: Promote CodeJourney to production (prepare)
+name: Promote CodeJourney to production
 
-# Prepares a production promotion; it does not perform one (homelab-infra plan P5.11,
-# decision D-12). It copies the exact stage digests of one released CodeJourney revision
-# into the production Zot repositories and prints the four-line edit for
-# homelab-infra. The operator commits that edit and syncs prod-codejourney by hand
-# (homelab-infra ADR-011: the human gate stays). This workflow holds no credential that
-# can write homelab-infra or reach a cluster.
+# Prepares a production release; the owner still decides it twice (homelab-infra
+# ADR-027, decision D-12, ADR-011):
+#   1. the `approve` job waits for the owner's approval (environment `production`,
+#      required reviewer);
+#   2. after approval, the stage digests of one released CodeJourney revision are copied
+#      into the production Zot repositories and written to homelab-release-state
+#      apps/codejourney/prod (image and source annotation only, 2 files, 4 lines);
+#   3. Argo CD Application prod-codejourney-release is manual: nothing runs in production
+#      until the owner reviews its diff and syncs it.
+# This workflow holds no credential that can write homelab-infra or reach a cluster.
 
 on:
   workflow_dispatch:
@@ -32,9 +36,23 @@ env:
   CRANE_ARM64_SHA256: 898c0cff975f898a33e8c4580bdafb0e7c02c7faa33374e946762f97c4ab7110
 
 jobs:
+  approve:
+    # Approval gate only: environment `production` has the owner as required reviewer and
+    # deployment branches limited to main. It holds no secrets and runs nothing.
+    environment: production
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Approved
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: echo "Promotion of ${SOURCE_SHA} approved by the production environment reviewer."
+
   prepare-promotion:
+    needs: approve
     # Same environment as the stage pipeline (deployment branches: main only): it holds
-    # ZOT_PUSH_PASSWORD and RELEASE_STATE_TOKEN, used here to read only.
+    # ZOT_PUSH_PASSWORD and RELEASE_STATE_TOKEN.
     environment: GITOPS_TOKEN
     runs-on: [self-hosted, k3s-gitops]
     timeout-minutes: 20
@@ -54,7 +72,7 @@ jobs:
           path: ops
           persist-credentials: false
 
-      - name: Checkout release state (read only, full history)
+      - name: Checkout release state (full history)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ env.RELEASE_STATE_REPOSITORY }}
@@ -164,44 +182,77 @@ jobs:
           promote web "${WEB_STAGE}"
           promote api "${API_STAGE}"
 
-      - name: Print the production edit
+      - name: Write the production release state
+        id: write
+        working-directory: release-state
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          WEB_IMAGE: ${{ steps.prod.outputs.web_image }}
+          API_IMAGE: ${{ steps.prod.outputs.api_image }}
+          RELEASE_STATE_TOKEN: ${{ secrets.RELEASE_STATE_TOKEN }}
+        run: |
+          set -eu
+          git checkout -q "${RELEASE_STATE_BRANCH}"
+          python3 ../ops/scripts/update-stage-manifests.py \
+            --state-dir . --environment prod \
+            --source-revision "${SOURCE_SHA}" \
+            --web-image "${WEB_IMAGE}" --api-image "${API_IMAGE}"
+          if git diff --quiet; then
+            echo "Production release state already references CodeJourney ${SOURCE_SHA}."
+            echo "commit=" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # Exactly the image line and the source annotation in each of the two files.
+          numstat="$(git diff --numstat | sort)"
+          expected="$(printf '2\t2\tapps/codejourney/prod/api-deployment.yaml\n2\t2\tapps/codejourney/prod/web-deployment.yaml')"
+          if [ "${numstat}" != "${expected}" ]; then
+            echo "::error::unexpected change set:"; git diff --stat; exit 1
+          fi
+          git diff --check
+          git config user.name "codejourney-release-bot"
+          git config user.email "codejourney-release-bot@users.noreply.github.com"
+          git add apps/codejourney/prod/api-deployment.yaml apps/codejourney/prod/web-deployment.yaml
+          git commit \
+            -m "deploy(prod): CodeJourney ${SOURCE_SHA:0:12} (awaiting manual sync)" \
+            -m "Source: https://github.com/J4yM1l/CodeJourney/commit/${SOURCE_SHA}" \
+            -m "Approved run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          push() {
+            git -c credential.helper= \
+              -c 'credential.helper=!f() { echo username=x-access-token; echo "password=${RELEASE_STATE_TOKEN}"; }; f' \
+              "$@"
+          }
+          # The stage pipeline may have pushed meanwhile: rebase once and retry.
+          if ! push push origin "HEAD:${RELEASE_STATE_BRANCH}"; then
+            push pull --rebase origin "${RELEASE_STATE_BRANCH}"
+            push push origin "HEAD:${RELEASE_STATE_BRANCH}"
+          fi
+          echo "commit=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish promotion summary
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           WEB_IMAGE: ${{ steps.prod.outputs.web_image }}
           API_IMAGE: ${{ steps.prod.outputs.api_image }}
           STATE_COMMIT: ${{ steps.stage.outputs.release_state_commit }}
           CURRENT_STAGE: ${{ steps.stage.outputs.current_stage }}
+          PROD_COMMIT: ${{ steps.write.outputs.commit }}
         run: |
           {
-            echo "## CodeJourney production promotion prepared"
+            echo "## CodeJourney production promotion written (awaiting manual sync)"
             echo
             echo "- Source revision: \`${SOURCE_SHA}\`"
             echo "- Stage release: \`${RELEASE_STATE_REPOSITORY}@${STATE_COMMIT:0:12}\` (currently on stage: ${CURRENT_STAGE})"
             echo "- Web: \`${WEB_IMAGE}\`"
             echo "- API: \`${API_IMAGE}\`"
-            echo "- Digests equal stage's (verified in Zot). Production is unchanged until you commit and sync."
+            if [ -n "${PROD_COMMIT}" ]; then
+              echo "- Production release state: \`${RELEASE_STATE_REPOSITORY}@${PROD_COMMIT:0:12}\` (2 files, 4 lines)"
+            else
+              echo "- Production release state already at this revision; nothing committed"
+            fi
             echo
-            echo "### Your edit in homelab-infra (four lines)"
-            echo
-            echo '`clusters/prod/applications/codejourney/web.yaml` and `api.yaml`:'
-            echo
-            echo '```yaml'
-            echo "        codejourney.homelab/source-revision: \"${SOURCE_SHA}\""
-            echo "          image: ${WEB_IMAGE}        # web.yaml"
-            echo "          image: ${API_IMAGE}        # api.yaml"
-            echo '```'
-            echo
-            echo 'Or, from the root of a homelab-infra checkout on `main`:'
-            echo
-            echo '```sh'
-            echo "d=clusters/prod/applications/codejourney"
-            echo "sed -i.bak -E 's#(codejourney.homelab/source-revision: \")[0-9a-f]{40}#\\1${SOURCE_SHA}#; s#(image: )192.168.0.45:30080/codejourney-prod-web:[^ ]+#\\1${WEB_IMAGE}#' \$d/web.yaml"
-            echo "sed -i.bak -E 's#(codejourney.homelab/source-revision: \")[0-9a-f]{40}#\\1${SOURCE_SHA}#; s#(image: )192.168.0.45:30080/codejourney-prod-api:[^ ]+#\\1${API_IMAGE}#' \$d/api.yaml"
-            echo "rm \$d/web.yaml.bak \$d/api.yaml.bak; git diff --stat   # expect 2 files, 4 lines"
-            echo "git commit -am \"deploy(prod): CodeJourney ${SOURCE_SHA:0:12}\""
-            echo '```'
-            echo
-            echo "Then follow the homelab-infra runbook \`docs/runbooks/codejourney-release.md\`: review the Argo diff, sync \`prod-codejourney\` without prune, validate."
+            echo "Production is unchanged until you review the diff of Argo CD Application"
+            echo "\`prod-codejourney-release\` and sync it by hand (homelab-infra runbook"
+            echo "\`docs/runbooks/codejourney-release.md\`)."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Remove registry credentials from the runner
