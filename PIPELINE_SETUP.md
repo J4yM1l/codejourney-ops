@@ -7,7 +7,7 @@ to copy those digests to Zot at `192.168.0.45:30080` over TLS (Homelab CA in
 `certs/`), logged in as `ci-pusher`. It verifies the digests are equal, then commits
 the stage web/API digests and source annotations to `homelab-release-state/main`
 (`apps/codejourney/stage/`). Argo CD Application `stage-codejourney-release` owns the
-rollout. The pipeline has no write access to `homelab-infra` (homelab-infra ADR-021). Production promotion remains manual.
+rollout. The pipeline has no write access to `homelab-infra` (homelab-infra ADR-021). Production promotion stays a human decision: `promote-prod.yml` only copies the stage digests to the production Zot repositories and prints the homelab-infra edit (see README).
 
 Required GitHub configuration:
 
