@@ -18,12 +18,23 @@ push or merge to main (CodeJourney, reviewed through a pull request)
   -> scripts/update-stage-manifests.py commits the digests to homelab-release-state/main
      (apps/codejourney/stage/{web,api}-deployment.yaml)
   -> Argo CD syncs stage-codejourney-release (plain YAML, Deployments only)
-  -> production promotion remains manual (homelab-infra runbook codejourney-release)
+  -> production promotion: prepared by a workflow, decided by the owner (below)
 ```
 
 The runner has no privileged builder, no host runtime socket and no Kubernetes
 Role. See [PIPELINE_SETUP.md](PIPELINE_SETUP.md) for the required secrets, how to
 validate a release, and troubleshooting.
+
+## Production promotion (prepare only)
+
+`Promote CodeJourney to production (prepare)` (`.github/workflows/promote-prod.yml`,
+run by hand from Actions with the full CodeJourney SHA) finds the stage release of that
+revision in `homelab-release-state`, copies both digests into `codejourney-prod-web`
+and `codejourney-prod-api` as `prod-<12-char SHA>` (never moving an existing tag),
+verifies the digests and prints the four-line edit for homelab-infra in the job
+summary. It writes nothing but those Zot tags. The owner commits the edit to
+homelab-infra and syncs `prod-codejourney` by hand (homelab-infra ADR-011, plan
+decision D-12, runbook `docs/runbooks/codejourney-release.md`).
 
 ## Other applications
 
