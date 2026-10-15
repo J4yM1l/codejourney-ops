@@ -35,6 +35,8 @@ jobs:
     environment: GITOPS_TOKEN
     runs-on: [self-hosted, k3s-gitops]
     timeout-minutes: 20
+    outputs:
+      image: ${{ steps.image.outputs.image }}
 
     steps:
       - name: Validate dispatch provenance
@@ -175,3 +177,46 @@ jobs:
           crane auth logout "${REGISTRY}" || true
           crane auth logout ghcr.io || true
           rm -rf "${RUNNER_TEMP}/docker"
+
+  notify:
+    needs: release-stage
+    if: always()
+    # Slack #deploys copy (homelab-infra ADR-030, unit S2): GitHub-hosted runner,
+    # environment slack-notify holds only the #deploys webhook (deployment branches:
+    # main). It runs after the release and can neither block nor change it.
+    environment: slack-notify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the notify script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/slack-notify.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Post the result to #deploys
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOYS_WEBHOOK }}
+          RESULT: ${{ needs.release-stage.result }}
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+          IMAGE: ${{ needs.release-stage.outputs.image }}
+        run: |
+          set -eu
+          # The dispatch payload is untrusted until release-stage validated it.
+          echo "${SOURCE_SHA}" | grep -Eq '^[0-9a-f]{40}$' || SOURCE_SHA="(invalid revision)"
+          short="${SOURCE_SHA:0:12}"
+          source_link="<https://github.com/${SOURCE_REPOSITORY}/commit/${SOURCE_SHA}|${short}>"
+          if [ "${RESULT}" = "success" ]; then
+            export STATE=released TITLE="Book Library ${short} released to stage"
+            export BODY="$(printf '%s\n' \
+              "Source ${source_link}" \
+              "Image \`${IMAGE##*@}\`" \
+              "Argo CD auto-syncs \`stage-book-library-release\`. Production is unchanged.")"
+          else
+            export STATE=failed TITLE="Book Library stage release ${RESULT}"
+            export BODY="Source ${source_link}. Stage is unchanged unless the release-state commit was pushed; see the run."
+          fi
+          bash scripts/slack-notify.sh

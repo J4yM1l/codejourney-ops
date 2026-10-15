@@ -10,6 +10,8 @@ name: Promote CodeJourney to production
 #   3. Argo CD Application prod-codejourney-release is manual: nothing runs in production
 #      until the owner reviews its diff and syncs it.
 # This workflow holds no credential that can write homelab-infra or reach a cluster.
+# notify-requested / notify-result copy the request and the outcome to Slack #deploys
+# (ADR-030 S2); they hold only that webhook and approve nothing.
 
 on:
   workflow_dispatch:
@@ -56,6 +58,10 @@ jobs:
     environment: GITOPS_TOKEN
     runs-on: [self-hosted, k3s-gitops]
     timeout-minutes: 20
+    outputs:
+      commit: ${{ steps.write.outputs.commit }}
+      web_image: ${{ steps.prod.outputs.web_image }}
+      api_image: ${{ steps.prod.outputs.api_image }}
 
     steps:
       - name: Validate input
@@ -260,3 +266,87 @@ jobs:
         run: |
           crane auth logout "${REGISTRY}" || true
           rm -rf "${RUNNER_TEMP}/docker"
+
+  notify-requested:
+    # Tells the owner a promotion waits for approval; runs beside `approve`.
+    # Slack #deploys copy (homelab-infra ADR-030, unit S2): GitHub-hosted runner,
+    # environment slack-notify holds only the #deploys webhook (deployment branches:
+    # main). It runs after the release and can neither block nor change it.
+    environment: slack-notify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the notify script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/slack-notify.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Post the request to #deploys
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOYS_WEBHOOK }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -eu
+          echo "${SOURCE_SHA}" | grep -Eq '^[0-9a-f]{40}$' || SOURCE_SHA="(invalid revision)"
+          short="${SOURCE_SHA:0:12}"
+          export STATE=waiting TITLE="Production promotion of CodeJourney ${short} waits for approval"
+          export BODY="$(printf '%s\n' \
+            "Requested by ${ACTOR}. Source <https://github.com/J4yM1l/CodeJourney/commit/${SOURCE_SHA}|${short}>" \
+            "Approve or reject it in the run (environment \`production\`). Approval is only given in GitHub; production changes only after a manual sync of \`prod-codejourney-release\`.")"
+          bash scripts/slack-notify.sh
+
+  notify-result:
+    needs: [approve, prepare-promotion]
+    if: always()
+    # Slack #deploys copy (homelab-infra ADR-030, unit S2): GitHub-hosted runner,
+    # environment slack-notify holds only the #deploys webhook (deployment branches:
+    # main). It runs after the release and can neither block nor change it.
+    environment: slack-notify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Checkout the notify script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/slack-notify.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Post the result to #deploys
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOYS_WEBHOOK }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          APPROVE: ${{ needs.approve.result }}
+          PREPARE: ${{ needs.prepare-promotion.result }}
+          COMMIT: ${{ needs.prepare-promotion.outputs.commit }}
+          WEB_IMAGE: ${{ needs.prepare-promotion.outputs.web_image }}
+          API_IMAGE: ${{ needs.prepare-promotion.outputs.api_image }}
+        run: |
+          set -eu
+          echo "${SOURCE_SHA}" | grep -Eq '^[0-9a-f]{40}$' || SOURCE_SHA="(invalid revision)"
+          short="${SOURCE_SHA:0:12}"
+          if [ "${APPROVE}" != "success" ]; then
+            export STATE=rejected TITLE="Production promotion of CodeJourney ${short} not approved (${APPROVE})"
+            export BODY="Nothing was copied or written; production is unchanged."
+          elif [ "${PREPARE}" != "success" ]; then
+            export STATE=failed TITLE="Production promotion of CodeJourney ${short} ${PREPARE}"
+            export BODY="Approved, but preparing the release did not finish; see the run. Production is unchanged."
+          elif [ -z "${COMMIT}" ]; then
+            export STATE=info TITLE="CodeJourney ${short} already in the production release state"
+            export BODY="Nothing new was written. If production does not run it yet, review and sync \`prod-codejourney-release\`."
+          else
+            export STATE=written TITLE="CodeJourney ${short} written for production, awaiting your manual sync"
+            export BODY="$(printf '%s\n' \
+              "Release state <https://github.com/J4yM1l/homelab-release-state/commit/${COMMIT}|${COMMIT:0:12}> (2 files, 4 lines)" \
+              "Web \`${WEB_IMAGE##*@}\`" \
+              "API \`${API_IMAGE##*@}\`" \
+              "Next: read the full Argo CD diff of \`prod-codejourney-release\` (only the image and source-revision lines may change), then sync by hand.")"
+          fi
+          bash scripts/slack-notify.sh
