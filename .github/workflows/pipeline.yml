@@ -58,7 +58,7 @@ jobs:
           echo "${API_CANDIDATE}" | grep -Eq '^ghcr\.io/j4ym1l/codejourney-stage-api@sha256:[0-9a-f]{64}$'
 
       - name: Checkout pipeline source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: ops
           persist-credentials: false
@@ -126,7 +126,7 @@ jobs:
           echo "api_image=${api_tag}@${api_digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout release state
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.RELEASE_STATE_REPOSITORY }}
           ref: ${{ env.RELEASE_STATE_BRANCH }}
@@ -212,7 +212,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout the notify script
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: scripts/slack-notify.sh
