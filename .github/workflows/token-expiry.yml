@@ -68,3 +68,21 @@ jobs:
             echo "::error::runner ACCESS_TOKEN expires in ${days} days; create a fine-grained token (codejourney-ops, Administration read/write), update runner-secrets in homelab-infra and this date"
             exit 1
           fi
+      # The Slack bot's release-state read token (fine-grained, Contents read on
+      # homelab-release-state only) lives only in the stage cluster (homelab-infra
+      # clusters/stage/applications/slackbot/secrets.sops.yaml) and the owner's Keychain,
+      # so its expiry is recorded here by date (read from GitHub's expiry header on
+      # 2026-10-17). Without it /lab release fails. Update the date when rotating.
+      - name: Check Slack bot GITHUB_TOKEN expiry (recorded date)
+        if: always()
+        env:
+          SLACKBOT_TOKEN_EXPIRES: "2027-01-15T04:20:18Z"
+          WARN_DAYS: "21"
+        run: |
+          set -eu
+          days=$(( ( $(date -d "${SLACKBOT_TOKEN_EXPIRES}" +%s) - $(date +%s) ) / 86400 ))
+          echo "Slack bot GITHUB_TOKEN: expires ${SLACKBOT_TOKEN_EXPIRES} (${days} days)"
+          if [ "${days}" -lt "${WARN_DAYS}" ]; then
+            echo "::error::Slack bot GITHUB_TOKEN expires in ${days} days; create a fine-grained token (homelab-release-state, Contents read-only), re-create slackbot-secrets in homelab-infra (docs/runbooks/slack.md#chatops-bot) and update this date"
+            exit 1
+          fi
